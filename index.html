@@ -240,7 +240,8 @@
   let last = null;          // letzter GPS-Fix
   let prevFix = null;       // für Kurs/Tempo-Berechnung, falls GPS keine liefert
   let lastSent = null;      // {lat,lon,t}
-  let sentCount = 0, sending = false, sendStarted = 0, lastAttempt = 0;
+  let sentCount = 0, sending = false, sendStarted = 0, lastAttempt = 0, staleWarned = false;
+  const STALE_S = 30;       // älter als 30 s = nicht mehr senden
 
   const toRad = d => d*Math.PI/180;
   function dist(a, b){ // Meter
@@ -285,6 +286,12 @@
   async function maybeSend(){
     if (!last || !running || sending) return;
     const now = Date.now();
+    // Veraltete Fixes nie senden: lieber keine Position als eine falsche
+    if (now - last.t > STALE_S*1000) {
+      if (!staleWarned) { pill("GPS veraltet","warn"); log(`Kein frischer GPS-Fix seit ${STALE_S} s – sende nichts`); staleWarned = true; }
+      return;
+    }
+    staleWarned = false;
     if (now - lastAttempt < cfg.interval*1000) return;      // auch nach Fehlern nicht im Sekundentakt hämmern
     if (lastSent) {
       const age = (now - lastSent.t)/1000;
@@ -320,7 +327,10 @@
     if (sending && sendStarted && Date.now() - sendStarted > 15000) {   // Watchdog
       sending = false; sendStarted = 0; log("Hängende Anfrage verworfen");
     }
-    if (last) $("sPos").textContent = `${last.lat.toFixed(4)}, ${last.lon.toFixed(4)} · ±${Math.round(last.acc)} m`;
+    if (last) {
+      const fa = Math.round((Date.now()-last.t)/1000);
+      $("sPos").textContent = `${last.lat.toFixed(4)}, ${last.lon.toFixed(4)} · ±${Math.round(last.acc)} m · Fix vor ${fa} s`;
+    }
     if (lastSent) {
       const a = Math.round((Date.now()-lastSent.t)/1000);
       $("sAge").textContent = a; $("bStat").textContent = `läuft · ${sentCount} gesendet · vor ${a}s`;
@@ -338,7 +348,8 @@
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && running) {
       if (cfg.wake) acquireWake();
-      maybeSend();
+      stopGeo(); startGeo();       // GPS-Abo neu starten – Chrome nimmt es nach dem Hintergrund nicht immer wieder auf
+      log("Wieder im Vordergrund – GPS neu gestartet");
     } else if (running) log("Seite im Hintergrund – Browser drosselt/pausiert GPS");
   });
 
