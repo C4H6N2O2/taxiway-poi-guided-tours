@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>BTR Roadtrip</title>
+<style>
+  :root{
+    --bg:#0b0f14; --card:#141a22; --line:#232c38; --text:#e6edf3; --muted:#8b98a7;
+    --accent:#f5a524; --ok:#3fb950; --err:#f85149; --warn:#d29922;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  main{max-width:560px;margin:0 auto;padding:16px 16px 40px}
+  h1{font-size:20px;margin:4px 0 14px;display:flex;align-items:center;gap:8px}
+  h1 small{font-size:12px;color:var(--muted);font-weight:400}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+    background:#0e131a;color:var(--text);font-size:16px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .check{display:flex;align-items:center;gap:10px;margin:10px 0;color:var(--text);font-size:15px}
+  .check input{width:22px;height:22px;flex:none}
+  button{width:100%;padding:14px;border:0;border-radius:12px;font-size:17px;font-weight:600;
+    background:var(--accent);color:#111;cursor:pointer}
+  button.sec{background:#222b36;color:var(--text);font-weight:500}
+  button.stop{background:var(--err);color:#fff}
+  button:disabled{opacity:.5}
+  .btns{display:grid;gap:10px}
+  .btns.two{grid-template-columns:1fr 1fr}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+  .stat b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+  .stat span{font-size:11px;color:var(--muted)}
+  .pill{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;background:#222b36}
+  .pill.ok{background:rgba(63,185,80,.18);color:var(--ok)}
+  .pill.err{background:rgba(248,81,73,.18);color:var(--err)}
+  .pill.warn{background:rgba(210,153,34,.18);color:var(--warn)}
+  #log{font:12px/1.5 ui-monospace,Menlo,monospace;color:var(--muted);max-height:160px;overflow:auto;white-space:pre-wrap}
+  .hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+  .hidden{display:none!important}
+  details summary{cursor:pointer;color:var(--muted);font-size:14px}
+  #frameWrap{border-radius:12px;overflow:hidden;border:1px solid var(--line);height:55vh;margin-top:10px}
+  #frameWrap iframe{width:100%;height:100%;border:0}
+  /* Schwarzbild für AMOLED: schwarze Pixel = praktisch kein Strom */
+  #black{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;
+    align-items:center;justify-content:flex-end;padding-bottom:40px;color:#333;font-size:13px}
+  #black b{color:#4a4a4a;font-size:15px;font-weight:500}
+</style>
+</head>
+<body>
+<main>
+  <h1>🚗📻 BTR Roadtrip <small>Auto als Flugzeug</small></h1>
+
+  <!-- LOGIN -->
+  <section class="card" id="loginCard">
+    <h2>Bushtalk-Radio-Login</h2>
+    <label for="user">Benutzername</label>
+    <input id="user" autocomplete="username" autocapitalize="off">
+    <label for="pass">Passwort</label>
+    <input id="pass" type="password" autocomplete="current-password">
+    <p class="hint">Das Passwort wird nur einmal an BTR geschickt und nicht gespeichert – gespeichert wird nur das Sitzungs-Token.</p>
+    <div class="btns" style="margin-top:12px"><button id="loginBtn">Anmelden</button></div>
+  </section>
+
+  <!-- STATUS -->
+  <section class="card hidden" id="statusCard">
+    <h2>Status <span id="statePill" class="pill">bereit</span></h2>
+    <div class="stats">
+      <div class="stat"><b id="sSpeed">–</b><span>km/h</span></div>
+      <div class="stat"><b id="sSent">0</b><span>gesendet</span></div>
+      <div class="stat"><b id="sAge">–</b><span>s seit Senden</span></div>
+    </div>
+    <p class="hint" id="sInfo">Angemeldet als <b id="whoami"></b></p>
+    <div class="btns" style="margin-top:12px">
+      <button id="startBtn">Roadtrip starten</button>
+      <button id="stopBtn" class="stop hidden">Stoppen</button>
+      <div class="btns two">
+        <button id="blackBtn" class="sec">Schwarzbild</button>
+        <button id="btrBtn" class="sec">BTR-Karte öffnen</button>
+      </div>
+    </div>
+    <div id="frameWrap" class="hidden"></div>
+  </section>
+
+  <!-- EINSTELLUNGEN -->
+  <section class="card hidden" id="setCard">
+    <h2>Einstellungen</h2>
+    <div class="row">
+      <div><label for="tail">Kennung (ATC_ID)</label><input id="tail" maxlength="10"></div>
+      <div><label for="alt">Gemeldete Höhe (ft AGL)</label><input id="alt" type="number" min="0" step="100"></div>
+    </div>
+    <div class="row">
+      <div><label for="interval">Sende-Intervall</label>
+        <select id="interval">
+          <option value="5">5 s (wie Original)</option>
+          <option value="10">10 s</option>
+          <option value="15">15 s</option>
+          <option value="30">30 s (sparsam)</option>
+        </select></div>
+      <div><label for="minMove">Senden ab Bewegung</label>
+        <select id="minMove">
+          <option value="0">immer</option>
+          <option value="25">25 m</option>
+          <option value="75">75 m</option>
+          <option value="200">200 m</option>
+        </select></div>
+    </div>
+    <label class="check"><input type="checkbox" id="onGround"> Als „am Boden“ melden</label>
+    <label class="check"><input type="checkbox" id="hiAcc"> Präzises GPS (empfohlen im Auto)</label>
+    <label class="check"><input type="checkbox" id="wake"> Bildschirm anlassen (nötig, sonst stoppt der Browser)</label>
+    <label class="check"><input type="checkbox" id="embed"> BTR-Karte in dieser Seite einbetten (für Audio)</label>
+    <label class="check"><input type="checkbox" id="keepAlive"> Experimentell: Hintergrund-Trick (stilles Audio)</label>
+    <details>
+      <summary>Erweitert</summary>
+      <label for="api">API-Basis-URL (nur ändern, wenn du einen Proxy nutzt)</label>
+      <input id="api" autocapitalize="off" placeholder="https://bushtalkradio.com">
+      <p class="hint">Falls der Login mit „Netzwerk/CORS“ scheitert: <code>worker.js</code> als Cloudflare Worker deployen und dessen URL hier eintragen.</p>
+      <div class="btns" style="margin-top:10px"><button id="logoutBtn" class="sec">Abmelden</button></div>
+    </details>
+  </section>
+
+  <section class="card hidden" id="logCard">
+    <h2>Protokoll</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<div id="black" class="hidden">
+  <b id="bStat">läuft</b>
+  <span>Tippen zum Beenden des Schwarzbilds</span>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const CLIENT_NAME = "ROADTRIP-WEB", CLIENT_VERSION = "1.0.0";
+  const HEARTBEAT_S = 30;            // auch im Stand alle 30 s melden, damit BTR die Sitzung hält
+  const store = {
+    get(k, d){ try{ const v = localStorage.getItem("btr_"+k); return v===null ? d : JSON.parse(v);}catch{ return d; } },
+    set(k, v){ try{ localStorage.setItem("btr_"+k, JSON.stringify(v)); }catch{} },
+    del(k){ try{ localStorage.removeItem("btr_"+k); }catch{} }
+  };
+
+  // ---------- Einstellungen ----------
+  const defaults = { tail:"AUTO-1", alt:1000, interval:10, minMove:25, onGround:false,
+                     hiAcc:true, wake:true, embed:false, keepAlive:false, api:"" };
+  const cfg = Object.assign({}, defaults, store.get("cfg", {}));
+  const fields = ["tail","alt","interval","minMove","onGround","hiAcc","wake","embed","keepAlive","api"];
+  fields.forEach(f => {
+    const el = $(f);
+    if (el.type === "checkbox") el.checked = !!cfg[f]; else el.value = cfg[f];
+    el.addEventListener("change", () => {
+      cfg[f] = el.type === "checkbox" ? el.checked
+             : (el.type === "number" || el.tagName === "SELECT") ? Number(el.value) : el.value.trim();
+      store.set("cfg", cfg);
+      if (f === "embed") toggleEmbed();
+      if (f === "wake" && running) cfg.wake ? acquireWake() : releaseWake();
+      if (f === "hiAcc" && running) { stopGeo(); startGeo(); }
+      if (f === "keepAlive" && running) cfg.keepAlive ? startKeepAlive() : stopKeepAlive();
+    });
+  });
+  const apiBase = () => (cfg.api || "https://bushtalkradio.com").replace(/\/+$/,"");
+
+  // ---------- Log ----------
+  function log(msg){
+    const t = new Date().toLocaleTimeString("de-DE");
+    const el = $("log"); el.textContent = `${t}  ${msg}\n` + el.textContent.slice(0, 4000);
+  }
+  function pill(text, cls){ const p=$("statePill"); p.textContent=text; p.className="pill "+(cls||""); }
+
+  // ---------- Auth ----------
+  let token = store.get("token", "");
+  let username = store.get("username", "");
+
+  function showUI(){
+    const loggedIn = !!token;
+    $("loginCard").classList.toggle("hidden", loggedIn);
+    ["statusCard","setCard","logCard"].forEach(id => $(id).classList.toggle("hidden", !loggedIn));
+    $("whoami").textContent = username;
+    if (!loggedIn) $("user").value = username;
+  }
+
+  async function api(path, body, withAuth){
+    const headers = { "Content-Type":"application/json",
+      "X-BTR-CLIENT-NAME":CLIENT_NAME, "X-BTR-CLIENT-VERSION":CLIENT_VERSION };
+    if (withAuth) headers.Authorization = "Bearer " + token;
+    const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 10000);
+    try {
+      return await fetch(apiBase()+path, { method:"POST", headers, body:JSON.stringify(body),
+                                           signal:ctrl.signal, keepalive:true });
+    } finally { clearTimeout(to); }
+  }
+
+  $("loginBtn").onclick = async () => {
+    const u = $("user").value.trim(), p = $("pass").value;
+    if (!u || !p) return alert("Bitte Benutzername und Passwort eingeben.");
+    $("loginBtn").disabled = true; $("loginBtn").textContent = "Melde an…";
+    try {
+      const r = await api("/api/authenticate", { username:u, password:p }, false);
+      if (!r.ok) throw new Error(r.status === 401 || r.status === 403 ? "Login abgelehnt – Zugangsdaten prüfen." : "Server antwortet mit Status "+r.status);
+      const d = await r.json();
+      if (!d.id_token) throw new Error("Antwort ohne Token.");
+      token = d.id_token; username = d.username || u;
+      store.set("token", token); store.set("username", username);
+      $("pass").value = "";
+      showUI(); log("Angemeldet als " + username);
+    } catch (e) {
+      const net = e instanceof TypeError || e.name === "AbortError";
+      alert(net ? "Keine Verbindung zu BTR. Wahrscheinlich blockiert der Browser die Anfrage (CORS). " +
+                  "Lösung: worker.js als Proxy nutzen (siehe „Erweitert“)." : e.message);
+    } finally { $("loginBtn").disabled = false; $("loginBtn").textContent = "Anmelden"; }
+  };
+
+  $("logoutBtn").onclick = () => {
+    stop(); token = ""; store.del("token"); showUI(); log("Abgemeldet");
+  };
+
+  // ---------- Geo & Senden ----------
+  let running = false, watchId = null, timer = null;
+  let last = null;          // letzter GPS-Fix
+  let prevFix = null;       // für Kurs/Tempo-Berechnung, falls GPS keine liefert
+  let lastSent = null;      // {lat,lon,t}
+  let sentCount = 0, sending = false;
+
+  const toRad = d => d*Math.PI/180;
+  function dist(a, b){ // Meter
+    const R=6371000, dLat=toRad(b.lat-a.lat), dLon=toRad(b.lon-a.lon);
+    const x=Math.sin(dLat/2)**2+Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+  function bearing(a, b){
+    const y=Math.sin(toRad(b.lon-a.lon))*Math.cos(toRad(b.lat));
+    const x=Math.cos(toRad(a.lat))*Math.sin(toRad(b.lat))-Math.sin(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.cos(toRad(b.lon-a.lon));
+    return (Math.atan2(y,x)*180/Math.PI+360)%360;
+  }
+
+  function onPos(p){
+    const c = p.coords;
+    const fix = { lat:c.latitude, lon:c.longitude, acc:c.accuracy, t:p.timestamp,
+                  speed:c.speed, heading:c.heading };
+    if (prevFix) {
+      const d = dist(prevFix, fix), dt = (fix.t - prevFix.t)/1000;
+      if ((fix.speed == null || isNaN(fix.speed)) && dt > 0) fix.speed = d/dt;
+      if ((fix.heading == null || isNaN(fix.heading)) && d > 10) fix.heading = bearing(prevFix, fix);
+      if (fix.heading == null || isNaN(fix.heading)) fix.heading = last ? last.heading : 0;
+    }
+    if (!prevFix || dist(prevFix, fix) > 10) prevFix = fix;
+    last = fix;
+    $("sSpeed").textContent = fix.speed != null ? Math.round(fix.speed*3.6) : "–";
+    if (!sending && (!lastSent || (Date.now()-lastSent.t) >= cfg.interval*1000)) maybeSend();
+  }
+  function onGeoErr(e){
+    pill("GPS-Fehler","err");
+    log("GPS: " + (e.code === 1 ? "Standortzugriff verweigert" : e.message));
+  }
+  function startGeo(){
+    watchId = navigator.geolocation.watchPosition(onPos, onGeoErr, {
+      enableHighAccuracy: !!cfg.hiAcc,
+      maximumAge: Math.max(1000, (cfg.interval-1)*1000),   // gecachte Fixes erlaubt → weniger GPS-Arbeit
+      timeout: 30000
+    });
+  }
+  function stopGeo(){ if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null; }
+
+  async function maybeSend(){
+    if (!last || !running || sending) return;
+    const now = Date.now();
+    if (lastSent) {
+      const age = (now - lastSent.t)/1000;
+      if (age < cfg.interval) return;
+      const moved = dist(lastSent, last);
+      if (moved < cfg.minMove && age < HEARTBEAT_S) return;   // stehen/Stau: nur Heartbeat
+    }
+    const payload = {
+      PLANE_LATITUDE: last.lat,
+      PLANE_LONGITUDE: last.lon,
+      ALTITUDE_ABOVE_GROUND: Number(cfg.alt) || 0,      // ft
+      GROUND_VELOCITY: (last.speed || 0) * 1.94384,     // m/s → kn
+      MAGNETIC_COMPASS: last.heading || 0,
+      ATC_ID: cfg.tail || "AUTO-1",
+      SIM_ON_GROUND: !!cfg.onGround
+    };
+    sending = true;
+    try {
+      const r = await api("/api/track", payload, true);
+      if (r.status === 401) { pill("Sitzung abgelaufen","err"); log("401 – bitte neu anmelden"); stop(); token=""; store.del("token"); showUI(); return; }
+      if (!r.ok) { pill("Server "+r.status,"warn"); log("Senden fehlgeschlagen: Status "+r.status); return; }
+      lastSent = { lat:last.lat, lon:last.lon, t:now };
+      sentCount++; $("sSent").textContent = sentCount;
+      pill(last.acc > 100 ? "läuft (GPS ungenau)" : "läuft", last.acc > 100 ? "warn" : "ok");
+    } catch (e) {
+      pill("offline","warn");          // Funkloch: einfach weiter, nächster Fix wird gesendet
+      if (e.name !== "AbortError") log("Netz: "+e.message);
+    } finally { sending = false; }
+  }
+
+  function tick(){
+    if (lastSent) {
+      const a = Math.round((Date.now()-lastSent.t)/1000);
+      $("sAge").textContent = a; $("bStat").textContent = `läuft · ${sentCount} gesendet · vor ${a}s`;
+    }
+    maybeSend();   // Heartbeat auch ohne neuen Fix
+  }
+
+  // ---------- Wake Lock ----------
+  let wakeLock = null;
+  async function acquireWake(){
+    if (!("wakeLock" in navigator)) { log("Wake Lock nicht unterstützt – Bildschirm-Timeout manuell hochsetzen"); return; }
+    try { wakeLock = await navigator.wakeLock.request("screen"); } catch(e){ log("Wake Lock: "+e.message); }
+  }
+  function releaseWake(){ if (wakeLock) wakeLock.release().catch(()=>{}); wakeLock = null; }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && running) {
+      if (cfg.wake) acquireWake();
+      maybeSend();
+    } else if (running) log("Seite im Hintergrund – Browser drosselt/pausiert GPS");
+  });
+
+  // ---------- Experimentell: stilles Audio hält den Tab aktiver ----------
+  let audioCtx = null;
+  function startKeepAlive(){
+    try {
+      audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      g.gain.value = 0.0001; o.connect(g).connect(audioCtx.destination); o.start();
+    } catch(e){ log("Keep-Alive: "+e.message); }
+  }
+  function stopKeepAlive(){ if (audioCtx) audioCtx.close().catch(()=>{}); audioCtx = null; }
+
+  // ---------- Start / Stopp ----------
+  function start(){
+    if (!("geolocation" in navigator)) return alert("Dieser Browser kann keinen Standort liefern.");
+    if (!isSecureContext) return alert("Standort geht nur über HTTPS. Bitte die Seite per https:// öffnen.");
+    running = true; sentCount = 0; lastSent = null; prevFix = null;
+    $("sSent").textContent = "0"; $("sAge").textContent = "–";
+    $("startBtn").classList.add("hidden"); $("stopBtn").classList.remove("hidden");
+    pill("warte auf GPS","warn"); log("Roadtrip gestartet");
+    startGeo(); timer = setInterval(tick, 1000);
+    if (cfg.wake) acquireWake();
+    if (cfg.keepAlive) startKeepAlive();
+  }
+  function stop(){
+    if (!running) return;
+    running = false; stopGeo(); clearInterval(timer); releaseWake(); stopKeepAlive();
+    $("startBtn").classList.remove("hidden"); $("stopBtn").classList.add("hidden");
+    $("black").classList.add("hidden");
+    pill("gestoppt"); log("Gestoppt nach " + sentCount + " Positionen");
+  }
+  $("startBtn").onclick = start;
+  $("stopBtn").onclick = () => { if (confirm("Roadtrip stoppen?")) stop(); };
+
+  // ---------- Schwarzbild ----------
+  $("blackBtn").onclick = () => { $("black").classList.remove("hidden"); };
+  $("black").onclick = () => { $("black").classList.add("hidden"); };
+
+  // ---------- BTR-Karte (Audio) ----------
+  const MAP_URL = "https://bushtalkradio.com/map";
+  $("btrBtn").onclick = () => window.open(MAP_URL, "_blank");
+  function toggleEmbed(){
+    const w = $("frameWrap");
+    if (cfg.embed) {
+      if (!w.firstChild) {
+        const f = document.createElement("iframe");
+        f.src = MAP_URL; f.allow = "autoplay; geolocation"; f.referrerPolicy = "no-referrer-when-downgrade";
+        w.appendChild(f);
+      }
+      w.classList.remove("hidden");
+    } else { w.innerHTML = ""; w.classList.add("hidden"); }
+  }
+
+  showUI(); toggleEmbed();
+  if (token) log("Gespeicherte Sitzung gefunden – bereit");
+})();
+</script>
+</body>
+</html>
