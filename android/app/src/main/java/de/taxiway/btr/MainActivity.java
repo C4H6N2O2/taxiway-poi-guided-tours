@@ -25,7 +25,9 @@ import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -37,11 +39,14 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.browser.customtabs.CustomTabColorSchemeParams;
+import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -74,6 +79,7 @@ public class MainActivity extends Activity {
             "}catch(e){console.error('[Polyfill] '+e);}})();";
 
     private final ArrayDeque<String> webErrors = new ArrayDeque<>();
+    private boolean chunkRetryDone = false;
     private WebView web;
     private TextView status;
     private Button startStop;
@@ -110,13 +116,16 @@ public class MainActivity extends Activity {
         row.setPadding(0, dp(8), 0, 0);
         startStop = button("Start", ACCENT, Color.BLACK);
         startStop.setOnClickListener(v -> toggleTracking());
-        Button settings = button("Einstellungen", Color.rgb(34, 43, 54), TEXT);
+        Button settings = button("Optionen", Color.rgb(34, 43, 54), TEXT);
         settings.setOnClickListener(v -> showSettings());
         Button battery = button("Akku", Color.rgb(34, 43, 54), TEXT);
         battery.setOnClickListener(v -> askBatteryExemption());
-        row.addView(startStop, weight(1.2f));
-        row.addView(settings, weight(1.4f));
+        Button chrome = button("Chrome", Color.rgb(34, 43, 54), TEXT);
+        chrome.setOnClickListener(v -> openInChromeTab());
+        row.addView(startStop, weight(1.1f));
+        row.addView(settings, weight(1.2f));
         row.addView(battery, weight(0.9f));
+        row.addView(chrome, weight(1.1f));
         bar.addView(row);
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -155,6 +164,30 @@ public class MainActivity extends Activity {
                 // Fallback für ältere WebViews ohne Document-Start-Skripte
                 if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) view.evaluateJavascript(POLYFILL, null);
             }
+
+            // Den Service-Worker der Seite gar nicht erst laden – er scheitert in der WebView ohnehin
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+                Uri u = req.getUrl();
+                if ("bushtalkradio.com".equals(u.getHost()) && "/sw.js".equals(u.getPath())) {
+                    return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+                            Collections.singletonMap("Cache-Control", "no-store"),
+                            new ByteArrayInputStream(new byte[0]));
+                }
+                return null;
+            }
+
+            // Jede fehlgeschlagene Anfrage protokollieren (Netzwerkfehler und HTTP-Fehler)
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
+                addWebError("N " + err.getErrorCode() + " " + err.getDescription() + "  ← " + shortUrl(req.getUrl()));
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest req, WebResourceResponse resp) {
+                if ("/sw.js".equals(req.getUrl().getPath())) return;   // von uns selbst blockiert
+                addWebError("H " + resp.getStatusCode() + " " + resp.getReasonPhrase() + "  ← " + shortUrl(req.getUrl()));
+            }
         });
         web.setWebChromeClient(new WebChromeClient() {
             // Die Karte bekommt KEINEN Handy-Standort – die Position kommt ausschließlich über /api/track
@@ -165,11 +198,13 @@ public class MainActivity extends Activity {
 
             @Override public boolean onConsoleMessage(ConsoleMessage m) {
                 if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR || m.messageLevel() == ConsoleMessage.MessageLevel.WARNING) {
-                    String line = m.messageLevel().name().charAt(0) + " " + m.message()
-                            + (m.sourceId() == null || m.sourceId().isEmpty() ? "" : "  (" + shortSrc(m.sourceId()) + ":" + m.lineNumber() + ")");
-                    synchronized (webErrors) {
-                        webErrors.addLast(line);
-                        while (webErrors.size() > 25) webErrors.removeFirst();
+                    addWebError(m.messageLevel().name().charAt(0) + " " + m.message()
+                            + (m.sourceId() == null || m.sourceId().isEmpty() ? "" : "  (" + shortSrc(m.sourceId()) + ":" + m.lineNumber() + ")"));
+                    // Einmaliger Rettungsversuch: Cache leeren und neu laden
+                    if (m.message() != null && m.message().contains("ChunkLoadError") && !chunkRetryDone) {
+                        chunkRetryDone = true;
+                        addWebError("→ ChunkLoadError: leere Cache und lade neu");
+                        ui.postDelayed(() -> { web.clearCache(true); web.loadUrl(MAP_URL); }, 500);
                     }
                 }
                 return true;
@@ -245,7 +280,32 @@ public class MainActivity extends Activity {
         status.setText(s.toString());
     }
 
+    // ---------- Karte in echtem Chrome (Custom Tab) ----------
+    private void openInChromeTab() {
+        try {
+            CustomTabsIntent tab = new CustomTabsIntent.Builder()
+                    .setShowTitle(true)
+                    .setDefaultColorSchemeParams(new CustomTabColorSchemeParams.Builder().setToolbarColor(CARD).build())
+                    .build();
+            tab.launchUrl(this, Uri.parse(MAP_URL));
+        } catch (Exception e) {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(MAP_URL)));
+        }
+    }
+
     // ---------- Fehleranzeige der Karte ----------
+    private void addWebError(String line) {
+        synchronized (webErrors) {
+            webErrors.addLast(line);
+            while (webErrors.size() > 40) webErrors.removeFirst();
+        }
+    }
+
+    private static String shortUrl(Uri u) {
+        String s = u.getHost() + u.getPath();
+        return s.length() > 90 ? s.substring(0, 90) + "…" : s;
+    }
+
     private static String shortSrc(String src) {
         int i = src.lastIndexOf('/');
         String s = i >= 0 ? src.substring(i + 1) : src;
@@ -400,7 +460,7 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(t);
         b.setAllCaps(false);
-        b.setTextSize(15);
+        b.setTextSize(14);
         b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setBackgroundColor(bg);
         b.setTextColor(fg);
