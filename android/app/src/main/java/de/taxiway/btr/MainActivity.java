@@ -36,12 +36,11 @@ import java.util.Locale;
 
 /**
  * Bedienoberfläche: Start/Stopp, Status, Einstellungen. Die BTR-Karte (mit den Ansagen)
- * läuft im richtigen Chrome – dort ist der Login vorhanden und alle Funktionen gehen.
+ * läuft im Standardbrowser (z. B. Firefox) – dort ist der Login vorhanden und alle Funktionen gehen.
  */
 public class MainActivity extends Activity {
 
     private static final String MAP_URL = "https://bushtalkradio.com/map";
-    private static final String CHROME = "com.android.chrome";
     private static final int REQ_PERMS = 1;
     private static final int BG = Color.rgb(11, 15, 20), CARD = Color.rgb(20, 26, 34),
             TEXT = Color.rgb(230, 237, 243), MUTED = Color.rgb(139, 152, 167),
@@ -110,8 +109,8 @@ public class MainActivity extends Activity {
         startStop.setOnClickListener(v -> toggleTracking());
         root.addView(startStop, fixed(60, 16));
 
-        Button map = button("BTR-Karte in Chrome öffnen", BTN, TEXT, 16);
-        map.setOnClickListener(v -> openMapInChrome());
+        Button map = button("BTR-Karte im Browser öffnen", BTN, TEXT, 16);
+        map.setOnClickListener(v -> openMapInBrowser());
         root.addView(map, fixed(52, 10));
 
         LinearLayout row = new LinearLayout(this);
@@ -125,9 +124,9 @@ public class MainActivity extends Activity {
         root.addView(row, matchWrap(10));
 
         TextView hint = text(13, MUTED, false);
-        hint.setText("So geht's: Start drücken → Karte in Chrome öffnen → dort angemeldet bleiben. " +
+        hint.setText("So geht's: Start drücken → Karte im Browser öffnen → dort angemeldet bleiben. " +
                 "Die App sendet deine Position im Hintergrund weiter, auch bei ausgeschaltetem Bildschirm. " +
-                "Die Ansagen spielt Chrome ab.");
+                "Die Ansagen spielt der Browser ab. Tipp: BTR-Radio leise mitlaufen lassen, dann bleibt der Browser aktiv.");
         hint.setPadding(dp(4), dp(18), dp(4), 0);
         root.addView(hint);
 
@@ -159,7 +158,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
         if (TrackerService.Prefs.sp(this).getBoolean("autoMap", true)) {
             openMapAfterStart = true;
-            ui.postDelayed(() -> { if (openMapAfterStart) { openMapAfterStart = false; openMapInChrome(); } }, 1200);
+            ui.postDelayed(() -> { if (openMapAfterStart) { openMapAfterStart = false; openMapInBrowser(); } }, 1200);
         }
     }
 
@@ -176,17 +175,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Öffnet die Karte im richtigen Chrome (nicht im eingebetteten Fenster), Fallback: Standardbrowser. */
-    private void openMapInChrome() {
+    /** Öffnet die Karte im Standardbrowser des Handys (z. B. Firefox) – dort ist der BTR-Login vorhanden. */
+    private void openMapInBrowser() {
         Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(MAP_URL));
+        i.addCategory(Intent.CATEGORY_BROWSABLE);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        i.setPackage(CHROME);
-        try {
-            startActivity(i);
-        } catch (Exception e) {
-            i.setPackage(null);
-            try { startActivity(i); } catch (Exception e2) { Toast.makeText(this, "Kein Browser gefunden", Toast.LENGTH_LONG).show(); }
-        }
+        try { startActivity(i); }
+        catch (Exception e) { Toast.makeText(this, "Kein Browser gefunden", Toast.LENGTH_LONG).show(); }
     }
 
     private void refreshStatus() {
@@ -243,7 +238,7 @@ public class MainActivity extends Activity {
         ground.setChecked(TrackerService.Prefs.onGround(this));
         f.addView(ground);
         CheckBox autoMap = new CheckBox(this);
-        autoMap.setText("Nach dem Start automatisch die Karte in Chrome öffnen");
+        autoMap.setText("Nach dem Start automatisch die Karte im Browser öffnen");
         autoMap.setChecked(TrackerService.Prefs.sp(this).getBoolean("autoMap", true));
         f.addView(autoMap);
 
