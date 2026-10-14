@@ -10,15 +10,24 @@ android {
         applicationId "de.taxiway.btr"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
+    }
+
+    signingConfigs {
+        // Fester Schlüssel, damit neue Versionen als Update installiert werden können
+        taxiway {
+            storeFile file("taxiway.keystore")
+            storePassword "taxiway"
+            keyAlias "taxiway"
+            keyPassword "taxiway"
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            // Mit dem Debug-Schlüssel signiert, damit die APK direkt installierbar ist
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.taxiway
         }
     }
 
@@ -31,4 +40,8 @@ android {
         abortOnError false
         checkReleaseBuilds false
     }
+}
+
+dependencies {
+    implementation "androidx.webkit:webkit:1.11.0"
 }
