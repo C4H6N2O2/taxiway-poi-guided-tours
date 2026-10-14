@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.location.Location;
 import android.net.Uri;
 import android.os.Build;
@@ -19,18 +20,6 @@ import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.ViewGroup;
-import android.view.WindowManager;
-import android.webkit.ConsoleMessage;
-import android.webkit.CookieManager;
-import android.webkit.GeolocationPermissions;
-import android.webkit.PermissionRequest;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -39,184 +28,110 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.browser.customtabs.CustomTabColorSchemeParams;
-import androidx.browser.customtabs.CustomTabsIntent;
-import androidx.webkit.WebViewCompat;
-import androidx.webkit.WebViewFeature;
-
 import org.json.JSONObject;
 
-import java.io.ByteArrayInputStream;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
+/**
+ * Bedienoberfläche: Start/Stopp, Status, Einstellungen. Die BTR-Karte (mit den Ansagen)
+ * läuft im richtigen Chrome – dort ist der Login vorhanden und alle Funktionen gehen.
+ */
 public class MainActivity extends Activity {
 
     private static final String MAP_URL = "https://bushtalkradio.com/map";
+    private static final String CHROME = "com.android.chrome";
     private static final int REQ_PERMS = 1;
     private static final int BG = Color.rgb(11, 15, 20), CARD = Color.rgb(20, 26, 34),
             TEXT = Color.rgb(230, 237, 243), MUTED = Color.rgb(139, 152, 167),
-            ACCENT = Color.rgb(245, 165, 36), RED = Color.rgb(248, 81, 73);
+            ACCENT = Color.rgb(245, 165, 36), RED = Color.rgb(248, 81, 73),
+            OK = Color.rgb(63, 185, 80), WARN = Color.rgb(210, 153, 34), BTN = Color.rgb(34, 43, 54);
 
-    /**
-     * Rüstet APIs nach, die Chrome hat, eine App-WebView aber nicht. Fehlen sie, stürzt die
-     * BTR-Seite (Next.js) mit "Application error: a client-side exception" ab.
-     */
-    private static final String POLYFILL = "(function(){try{" +
-            "if(!('Notification' in window)){var N=function(){};N.permission='denied';" +
-            "N.requestPermission=function(cb){if(cb)cb('denied');return Promise.resolve('denied');};window.Notification=N;}" +
-            "if(!navigator.share){navigator.share=function(){return Promise.reject(new Error('share not supported'));};}" +
-            "if(!navigator.canShare){navigator.canShare=function(){return false;};}" +
-            "if(!('wakeLock' in navigator)){try{Object.defineProperty(navigator,'wakeLock',{configurable:true,value:{request:function(){" +
-            "return Promise.resolve({released:false,type:'screen',release:function(){return Promise.resolve();},addEventListener:function(){},removeEventListener:function(){}});}}});}catch(e){}}" +
-            "if(navigator.permissions&&navigator.permissions.query){var q=navigator.permissions.query.bind(navigator.permissions);" +
-            "navigator.permissions.query=function(d){return q(d).catch(function(){return {state:'denied',onchange:null,addEventListener:function(){},removeEventListener:function(){}};});};}" +
-            "window.addEventListener('error',function(e){console.error('[JS] '+(e.message||e)+' @'+(e.filename||'')+':'+(e.lineno||''));});" +
-            "window.addEventListener('unhandledrejection',function(e){var r=e.reason;console.error('[Promise] '+(r&&(r.stack||r.message)||r));});" +
-            "}catch(e){console.error('[Polyfill] '+e);}})();";
-
-    private final ArrayDeque<String> webErrors = new ArrayDeque<>();
-    private boolean chunkRetryDone = false;
-    private WebView web;
-    private TextView status;
+    private TextView stateLine, bigSpeed, detail, account;
     private Button startStop;
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private boolean openMapAfterStart = false;
 
     private final Runnable refresher = new Runnable() {
         @Override public void run() { refreshStatus(); ui.postDelayed(this, 1000); }
     };
 
-    @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(BG);
+        scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(BG);
+        root.setPadding(dp(16), dp(20), dp(16), dp(24));
+        scroll.addView(root);
 
-        // --- Kopfleiste ---
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.VERTICAL);
-        bar.setBackgroundColor(CARD);
-        bar.setPadding(dp(14), dp(10), dp(14), dp(10));
+        TextView title = new TextView(this);
+        title.setText("Taxiway");
+        title.setTextColor(TEXT);
+        title.setTextSize(24);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(title);
+        TextView sub = new TextView(this);
+        sub.setText("Dein Auto als Flugzeug bei Bushtalk Radio");
+        sub.setTextColor(MUTED);
+        sub.setTextSize(14);
+        sub.setPadding(0, 0, 0, dp(16));
+        root.addView(sub);
 
-        status = new TextView(this);
-        status.setTextColor(TEXT);
-        status.setTextSize(14);
-        bar.addView(status);
+        // --- Statuskarte ---
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(16), dp(16), dp(16));
+        card.setBackground(rounded(CARD, 16));
+        stateLine = text(15, TEXT, true);
+        bigSpeed = text(44, TEXT, true);
+        bigSpeed.setPadding(0, dp(6), 0, 0);
+        TextView unit = text(13, MUTED, false);
+        unit.setText("km/h");
+        detail = text(14, MUTED, false);
+        detail.setPadding(0, dp(10), 0, 0);
+        account = text(13, MUTED, false);
+        account.setPadding(0, dp(8), 0, 0);
+        card.addView(stateLine);
+        card.addView(bigSpeed);
+        card.addView(unit);
+        card.addView(detail);
+        card.addView(account);
+        root.addView(card, matchWrap(0));
+
+        // --- Knöpfe ---
+        startStop = button("Start", ACCENT, Color.BLACK, 18);
+        startStop.setOnClickListener(v -> toggleTracking());
+        root.addView(startStop, fixed(60, 16));
+
+        Button map = button("BTR-Karte in Chrome öffnen", BTN, TEXT, 16);
+        map.setOnClickListener(v -> openMapInChrome());
+        root.addView(map, fixed(52, 10));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(8), 0, 0);
-        startStop = button("Start", ACCENT, Color.BLACK);
-        startStop.setOnClickListener(v -> toggleTracking());
-        Button settings = button("Optionen", Color.rgb(34, 43, 54), TEXT);
+        Button settings = button("Optionen", BTN, TEXT, 15);
         settings.setOnClickListener(v -> showSettings());
-        Button battery = button("Akku", Color.rgb(34, 43, 54), TEXT);
+        Button battery = button("Akku-Ausnahme", BTN, TEXT, 15);
         battery.setOnClickListener(v -> askBatteryExemption());
-        Button chrome = button("Chrome", Color.rgb(34, 43, 54), TEXT);
-        chrome.setOnClickListener(v -> openInChromeTab());
-        row.addView(startStop, weight(1.1f));
-        row.addView(settings, weight(1.2f));
-        row.addView(battery, weight(0.9f));
-        row.addView(chrome, weight(1.1f));
-        bar.addView(row);
-        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(settings, weight(1f, 0, 5));
+        row.addView(battery, weight(1f, 5, 0));
+        root.addView(row, matchWrap(10));
 
-        // --- BTR-Karte: hier einmal bei BTR anmelden, dann laufen die Ansagen ---
-        WebView.setWebContentsDebuggingEnabled(true);   // erlaubt Fehlersuche per chrome://inspect
-        web = new WebView(this);
-        WebSettings ws = web.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setDatabaseEnabled(true);
-        ws.setJavaScriptCanOpenWindowsAutomatically(true);
-        ws.setMediaPlaybackRequiresUserGesture(false);   // Ansagen dürfen ohne Antippen starten
-        ws.setLoadWithOverviewMode(true);
-        ws.setUseWideViewPort(true);
-        // Als normales Chrome ausgeben – manche Seiten verhalten sich in "WebViews" anders
-        ws.setUserAgentString(ws.getUserAgentString().replace("; wv", ""));
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+        TextView hint = text(13, MUTED, false);
+        hint.setText("So geht's: Start drücken → Karte in Chrome öffnen → dort angemeldet bleiben. " +
+                "Die App sendet deine Position im Hintergrund weiter, auch bei ausgeschaltetem Bildschirm. " +
+                "Die Ansagen spielt Chrome ab.");
+        hint.setPadding(dp(4), dp(18), dp(4), 0);
+        root.addView(hint);
 
-        // Fehlende Browser-Funktionen nachrüsten, BEVOR die Seite ihre Skripte startet
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            WebViewCompat.addDocumentStartJavaScript(web, POLYFILL, Collections.singleton("*"));
-        }
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
-                Uri u = req.getUrl();
-                String scheme = u.getScheme() == null ? "" : u.getScheme();
-                if (scheme.equals("https") || scheme.equals("http")) return false;   // Login-Flows etc. in der App lassen
-                try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignored) {}
-                return true;
-            }
-
-            @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                // Fallback für ältere WebViews ohne Document-Start-Skripte
-                if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) view.evaluateJavascript(POLYFILL, null);
-            }
-
-            // Den Service-Worker der Seite gar nicht erst laden – er scheitert in der WebView ohnehin
-            @Override
-            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
-                Uri u = req.getUrl();
-                if ("bushtalkradio.com".equals(u.getHost()) && "/sw.js".equals(u.getPath())) {
-                    return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
-                            Collections.singletonMap("Cache-Control", "no-store"),
-                            new ByteArrayInputStream(new byte[0]));
-                }
-                return null;
-            }
-
-            // Jede fehlgeschlagene Anfrage protokollieren (Netzwerkfehler und HTTP-Fehler)
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
-                addWebError("N " + err.getErrorCode() + " " + err.getDescription() + "  ← " + shortUrl(req.getUrl()));
-            }
-
-            @Override
-            public void onReceivedHttpError(WebView view, WebResourceRequest req, WebResourceResponse resp) {
-                if ("/sw.js".equals(req.getUrl().getPath())) return;   // von uns selbst blockiert
-                addWebError("H " + resp.getStatusCode() + " " + resp.getReasonPhrase() + "  ← " + shortUrl(req.getUrl()));
-            }
-        });
-        web.setWebChromeClient(new WebChromeClient() {
-            // Die Karte bekommt KEINEN Handy-Standort – die Position kommt ausschließlich über /api/track
-            @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback cb) {
-                cb.invoke(origin, false, false);
-            }
-            @Override public void onPermissionRequest(PermissionRequest r) { r.deny(); }
-
-            @Override public boolean onConsoleMessage(ConsoleMessage m) {
-                if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR || m.messageLevel() == ConsoleMessage.MessageLevel.WARNING) {
-                    addWebError(m.messageLevel().name().charAt(0) + " " + m.message()
-                            + (m.sourceId() == null || m.sourceId().isEmpty() ? "" : "  (" + shortSrc(m.sourceId()) + ":" + m.lineNumber() + ")"));
-                    // Einmaliger Rettungsversuch: Cache leeren und neu laden
-                    if (m.message() != null && m.message().contains("ChunkLoadError") && !chunkRetryDone) {
-                        chunkRetryDone = true;
-                        addWebError("→ ChunkLoadError: leere Cache und lade neu");
-                        ui.postDelayed(() -> { web.clearCache(true); web.loadUrl(MAP_URL); }, 500);
-                    }
-                }
-                return true;
-            }
-        });
-        // Antippen der Statuszeile zeigt die Fehler der Karte
-        status.setOnClickListener(v -> showWebErrors());
-        root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        setContentView(root);
-        if (b != null) web.restoreState(b); else web.loadUrl(MAP_URL);
-
+        setContentView(scroll);
         if (TrackerService.Prefs.token(this).isEmpty()) showSettings();
     }
 
@@ -242,6 +157,10 @@ public class MainActivity extends Activity {
     private void startTracker() {
         Intent i = new Intent(this, TrackerService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+        if (TrackerService.Prefs.sp(this).getBoolean("autoMap", true)) {
+            openMapAfterStart = true;
+            ui.postDelayed(() -> { if (openMapAfterStart) { openMapAfterStart = false; openMapInChrome(); } }, 1200);
+        }
     }
 
     @Override
@@ -257,87 +176,52 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Öffnet die Karte im richtigen Chrome (nicht im eingebetteten Fenster), Fallback: Standardbrowser. */
+    private void openMapInChrome() {
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(MAP_URL));
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        i.setPackage(CHROME);
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            i.setPackage(null);
+            try { startActivity(i); } catch (Exception e2) { Toast.makeText(this, "Kein Browser gefunden", Toast.LENGTH_LONG).show(); }
+        }
+    }
+
     private void refreshStatus() {
         boolean on = TrackerService.running;
         startStop.setText(on ? "Stopp" : "Start");
-        startStop.setBackgroundColor(on ? RED : ACCENT);
+        startStop.setBackground(rounded(on ? RED : ACCENT, 14));
         startStop.setTextColor(on ? Color.WHITE : Color.BLACK);
 
-        StringBuilder s = new StringBuilder();
-        String user = TrackerService.Prefs.user(this);
-        s.append(TrackerService.Prefs.tail(this)).append(user.isEmpty() ? " · nicht angemeldet" : " · " + user);
-        if (on) {
-            s.append("\n").append(TrackerService.lastStatus);
-            Location f = TrackerService.lastFix;
+        Location f = TrackerService.lastFix;
+        String st = TrackerService.lastStatus;
+        if (!on) {
+            stateLine.setText("● Bereit");
+            stateLine.setTextColor(MUTED);
+            bigSpeed.setText("–");
+            detail.setText("Start drücken, dann darf der Bildschirm aus.");
+        } else {
+            boolean good = st.startsWith("läuft");
+            stateLine.setText("● " + st);
+            stateLine.setTextColor(good ? OK : WARN);
             if (f != null) {
                 long age = (System.currentTimeMillis() - f.getTime()) / 1000;
-                s.append(String.format(Locale.GERMANY, "\n%.0f km/h · %d gesendet · Fix vor %d s",
-                        f.hasSpeed() ? f.getSpeed() * 3.6 : 0.0, TrackerService.sentCount, age));
+                bigSpeed.setText(String.format(Locale.GERMANY, "%.0f", f.hasSpeed() ? f.getSpeed() * 3.6 : 0.0));
+                long sentAgo = TrackerService.lastSentAt == 0 ? -1 : (System.currentTimeMillis() - TrackerService.lastSentAt) / 1000;
+                detail.setText(String.format(Locale.GERMANY, "%d gesendet%s · GPS-Fix vor %d s\n%.4f, %.4f",
+                        TrackerService.sentCount, sentAgo >= 0 ? " (zuletzt vor " + sentAgo + " s)" : "",
+                        age, f.getLatitude(), f.getLongitude()));
+            } else {
+                bigSpeed.setText("–");
+                detail.setText("Warte auf das erste GPS-Signal…");
             }
-        } else {
-            s.append("\nBereit – Start drücken, dann darf der Bildschirm aus.");
         }
-        status.setText(s.toString());
-    }
-
-    // ---------- Karte in echtem Chrome (Custom Tab) ----------
-    private void openInChromeTab() {
-        try {
-            CustomTabsIntent tab = new CustomTabsIntent.Builder()
-                    .setShowTitle(true)
-                    .setDefaultColorSchemeParams(new CustomTabColorSchemeParams.Builder().setToolbarColor(CARD).build())
-                    .build();
-            tab.launchUrl(this, Uri.parse(MAP_URL));
-        } catch (Exception e) {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(MAP_URL)));
-        }
-    }
-
-    // ---------- Fehleranzeige der Karte ----------
-    private void addWebError(String line) {
-        synchronized (webErrors) {
-            webErrors.addLast(line);
-            while (webErrors.size() > 40) webErrors.removeFirst();
-        }
-    }
-
-    private static String shortUrl(Uri u) {
-        String s = u.getHost() + u.getPath();
-        return s.length() > 90 ? s.substring(0, 90) + "…" : s;
-    }
-
-    private static String shortSrc(String src) {
-        int i = src.lastIndexOf('/');
-        String s = i >= 0 ? src.substring(i + 1) : src;
-        return s.length() > 40 ? s.substring(0, 40) + "…" : s;
-    }
-
-    private void showWebErrors() {
-        StringBuilder sb = new StringBuilder();
-        android.content.pm.PackageInfo wv = WebView.getCurrentWebViewPackage();
-        sb.append("WebView: ").append(wv == null ? "?" : wv.packageName + " " + wv.versionName).append("\n\n");
-        synchronized (webErrors) {
-            if (webErrors.isEmpty()) sb.append("Keine Fehler protokolliert.");
-            for (String e : webErrors) sb.append(e).append("\n\n");
-        }
-        TextView tv = new TextView(this);
-        tv.setText(sb.toString());
-        tv.setTextIsSelectable(true);
-        tv.setTextSize(12);
-        tv.setPadding(dp(20), dp(10), dp(20), dp(10));
-        ScrollView sv = new ScrollView(this);
-        sv.addView(tv);
-        new AlertDialog.Builder(this)
-                .setTitle("Karte – Fehlerprotokoll")
-                .setView(sv)
-                .setPositiveButton("Karte neu laden", (d, w) -> { synchronized (webErrors) { webErrors.clear(); } web.loadUrl(MAP_URL); })
-                .setNeutralButton("Kopieren", (d, w) -> {
-                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Taxiway Fehler", sb.toString()));
-                    Toast.makeText(this, "Kopiert", Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton("Schließen", null)
-                .show();
+        String user = TrackerService.Prefs.user(this);
+        account.setText(String.format(Locale.GERMANY, "%s · %s · %d ft · alle %d s",
+                user.isEmpty() ? "nicht angemeldet" : user, TrackerService.Prefs.tail(this),
+                TrackerService.Prefs.altFt(this), TrackerService.Prefs.intervalSec(this)));
     }
 
     // ---------- Einstellungen & Login ----------
@@ -358,28 +242,28 @@ public class MainActivity extends Activity {
         ground.setText("Als „am Boden“ melden");
         ground.setChecked(TrackerService.Prefs.onGround(this));
         f.addView(ground);
-        CheckBox keepOn = new CheckBox(this);
-        keepOn.setText("Bildschirm anlassen, solange die App offen ist");
-        keepOn.setChecked(TrackerService.Prefs.sp(this).getBoolean("keepOn", false));
-        f.addView(keepOn);
+        CheckBox autoMap = new CheckBox(this);
+        autoMap.setText("Nach dem Start automatisch die Karte in Chrome öffnen");
+        autoMap.setChecked(TrackerService.Prefs.sp(this).getBoolean("autoMap", true));
+        f.addView(autoMap);
 
         new AlertDialog.Builder(this)
-                .setTitle("Einstellungen")
+                .setTitle("Optionen")
                 .setView(sv)
                 .setNegativeButton("Abbrechen", null)
                 .setPositiveButton("Speichern", (d, w) -> {
                     int a = parse(alt.getText().toString(), 1000, 0, 60000);
                     int iv = parse(interval.getText().toString(), 5, 5, 60);
+                    String t = tail.getText().toString().trim();
                     TrackerService.Prefs.sp(this).edit()
-                            .putString("tail", tail.getText().toString().trim().isEmpty() ? "AUTO-1" : tail.getText().toString().trim())
+                            .putString("tail", t.isEmpty() ? "AUTO-1" : t)
                             .putInt("alt", a).putInt("interval", iv)
                             .putBoolean("ground", ground.isChecked())
-                            .putBoolean("keepOn", keepOn.isChecked())
+                            .putBoolean("autoMap", autoMap.isChecked())
                             .apply();
-                    applyKeepOn();
                     String u = user.getText().toString().trim(), p = pass.getText().toString();
                     if (!u.isEmpty() && !p.isEmpty()) login(u, p);
-                    else Toast.makeText(this, "Gespeichert. Änderungen gelten beim nächsten Start.", Toast.LENGTH_SHORT).show();
+                    else Toast.makeText(this, TrackerService.running ? "Gespeichert – gilt ab dem nächsten Start." : "Gespeichert.", Toast.LENGTH_SHORT).show();
                 })
                 .show();
     }
@@ -422,49 +306,55 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void applyKeepOn() {
-        if (TrackerService.Prefs.sp(this).getBoolean("keepOn", false))
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        else
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-    }
-
     // ---------- Lebenszyklus ----------
-    // Absichtlich KEIN web.onPause()/pauseTimers(): die Karte soll im Hintergrund weiter Ansagen abspielen.
-    @Override protected void onResume() { super.onResume(); applyKeepOn(); ui.post(refresher); }
-    @Override protected void onPause() { super.onPause(); ui.removeCallbacks(refresher); CookieManager.getInstance().flush(); }
-    @Override protected void onSaveInstanceState(Bundle out) { super.onSaveInstanceState(out); web.saveState(out); }
-
-    @Override
-    public void onBackPressed() {
-        if (web.canGoBack()) web.goBack(); else moveTaskToBack(true);   // nicht beenden, nur in den Hintergrund
-    }
-
-    @Override
-    protected void onDestroy() {
-        ui.removeCallbacks(refresher);
-        web.destroy();
-        super.onDestroy();
-    }
+    @Override protected void onResume() { super.onResume(); ui.post(refresher); }
+    @Override protected void onPause() { super.onPause(); ui.removeCallbacks(refresher); }
 
     // ---------- kleine UI-Helfer ----------
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
-    private LinearLayout.LayoutParams weight(float w) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), w);
-        lp.setMargins(dp(3), 0, dp(3), 0);
+    private GradientDrawable rounded(int color, int radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radiusDp));
+        return g;
+    }
+
+    private TextView text(int sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        return t;
+    }
+
+    private LinearLayout.LayoutParams matchWrap(int topDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(topDp);
         return lp;
     }
 
-    private Button button(String t, int bg, int fg) {
+    private LinearLayout.LayoutParams fixed(int heightDp, int topDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(heightDp));
+        lp.topMargin = dp(topDp);
+        return lp;
+    }
+
+    private LinearLayout.LayoutParams weight(float w, int leftDp, int rightDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), w);
+        lp.setMargins(dp(leftDp), 0, dp(rightDp), 0);
+        return lp;
+    }
+
+    private Button button(String t, int bg, int fg, int sp) {
         Button b = new Button(this);
         b.setText(t);
         b.setAllCaps(false);
-        b.setTextSize(14);
+        b.setTextSize(sp);
         b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setBackgroundColor(bg);
+        b.setBackground(rounded(bg, 14));
         b.setTextColor(fg);
-        b.setPadding(dp(4), 0, dp(4), 0);
+        b.setStateListAnimator(null);
         b.setGravity(Gravity.CENTER);
         return b;
     }
