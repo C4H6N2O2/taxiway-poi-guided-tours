@@ -75,7 +75,7 @@
       <div class="stat"><b id="sSent">0</b><span>gesendet</span></div>
       <div class="stat"><b id="sAge">–</b><span>s seit Senden</span></div>
     </div>
-    <p class="hint" id="sInfo">Angemeldet als <b id="whoami"></b></p>
+    <p class="hint" id="sInfo">Angemeldet als <b id="whoami"></b><br>GPS: <span id="sPos">–</span></p>
     <div class="btns" style="margin-top:12px">
       <button id="startBtn">Roadtrip starten</button>
       <button id="stopBtn" class="stop hidden">Stoppen</button>
@@ -120,6 +120,11 @@
       <label for="api">API-Basis-URL (nur ändern, wenn du einen Proxy nutzt)</label>
       <input id="api" autocapitalize="off" placeholder="https://bushtalkradio.com">
       <p class="hint">Falls der Login mit „Netzwerk/CORS“ scheitert: <code>worker.js</code> als Cloudflare Worker deployen und dessen URL hier eintragen.</p>
+      <label for="client">Client-Name (an BTR gemeldet)</label>
+      <select id="client">
+        <option value="ROADTRIP-WEB">ROADTRIP-WEB (eigener)</option>
+        <option value="XPLANE-12">XPLANE-12 (wie offizieller X-Plane-Client)</option>
+      </select>
       <div class="btns" style="margin-top:10px"><button id="logoutBtn" class="sec">Abmelden</button></div>
     </details>
   </section>
@@ -148,16 +153,17 @@
   };
 
   // ---------- Einstellungen ----------
-  const defaults = { tail:"AUTO-1", alt:1000, interval:10, minMove:25, onGround:false,
-                     hiAcc:true, wake:true, embed:false, keepAlive:false, api:"" };
+  const defaults = { tail:"AUTO-1", alt:1000, interval:5, minMove:0, onGround:false,
+                     hiAcc:true, wake:true, embed:false, keepAlive:false, api:"", client:"ROADTRIP-WEB" };
   const cfg = Object.assign({}, defaults, store.get("cfg", {}));
-  const fields = ["tail","alt","interval","minMove","onGround","hiAcc","wake","embed","keepAlive","api"];
+  const fields = ["tail","alt","interval","minMove","onGround","hiAcc","wake","embed","keepAlive","api","client"];
   fields.forEach(f => {
     const el = $(f);
     if (el.type === "checkbox") el.checked = !!cfg[f]; else el.value = cfg[f];
     el.addEventListener("change", () => {
       cfg[f] = el.type === "checkbox" ? el.checked
-             : (el.type === "number" || el.tagName === "SELECT") ? Number(el.value) : el.value.trim();
+             : (el.type === "number" || (el.tagName === "SELECT" && el.value !== "" && !isNaN(el.value)))
+               ? Number(el.value) : el.value.trim();
       store.set("cfg", cfg);
       if (f === "embed") toggleEmbed();
       if (f === "wake" && running) cfg.wake ? acquireWake() : releaseWake();
@@ -188,12 +194,20 @@
 
   async function api(path, body, withAuth){
     const headers = { "Content-Type":"application/json",
-      "X-BTR-CLIENT-NAME":CLIENT_NAME, "X-BTR-CLIENT-VERSION":CLIENT_VERSION };
+      "X-BTR-CLIENT-NAME":(cfg.client || CLIENT_NAME), "X-BTR-CLIENT-VERSION":CLIENT_VERSION };
     if (withAuth) headers.Authorization = "Bearer " + token;
-    const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 10000);
+    const ctrl = new AbortController();
+    let to;
+    // Harte Zeitgrenze: Promise.race garantiert, dass eine hängende Anfrage nie die Schleife blockiert
+    const timeout = new Promise((_, rej) => { to = setTimeout(() => {
+      ctrl.abort(); const e = new Error("Zeitüberschreitung"); e.name = "TimeoutError"; rej(e);
+    }, 8000); });
     try {
-      return await fetch(apiBase()+path, { method:"POST", headers, body:JSON.stringify(body),
-                                           signal:ctrl.signal, keepalive:true });
+      return await Promise.race([
+        fetch(apiBase()+path, { method:"POST", headers, body:JSON.stringify(body),
+                                signal:ctrl.signal, cache:"no-store" }),
+        timeout
+      ]);
     } finally { clearTimeout(to); }
   }
 
@@ -226,7 +240,7 @@
   let last = null;          // letzter GPS-Fix
   let prevFix = null;       // für Kurs/Tempo-Berechnung, falls GPS keine liefert
   let lastSent = null;      // {lat,lon,t}
-  let sentCount = 0, sending = false;
+  let sentCount = 0, sending = false, sendStarted = 0, lastAttempt = 0;
 
   const toRad = d => d*Math.PI/180;
   function dist(a, b){ // Meter
@@ -271,6 +285,7 @@
   async function maybeSend(){
     if (!last || !running || sending) return;
     const now = Date.now();
+    if (now - lastAttempt < cfg.interval*1000) return;      // auch nach Fehlern nicht im Sekundentakt hämmern
     if (lastSent) {
       const age = (now - lastSent.t)/1000;
       if (age < cfg.interval) return;
@@ -286,7 +301,7 @@
       ATC_ID: cfg.tail || "AUTO-1",
       SIM_ON_GROUND: !!cfg.onGround
     };
-    sending = true;
+    sending = true; sendStarted = now; lastAttempt = now;
     try {
       const r = await api("/api/track", payload, true);
       if (r.status === 401) { pill("Sitzung abgelaufen","err"); log("401 – bitte neu anmelden"); stop(); token=""; store.del("token"); showUI(); return; }
@@ -294,13 +309,18 @@
       lastSent = { lat:last.lat, lon:last.lon, t:now };
       sentCount++; $("sSent").textContent = sentCount;
       pill(last.acc > 100 ? "läuft (GPS ungenau)" : "läuft", last.acc > 100 ? "warn" : "ok");
+      if (sentCount === 1 || sentCount % 20 === 0) log(`Gesendet #${sentCount}: ${last.lat.toFixed(4)}, ${last.lon.toFixed(4)} (±${Math.round(last.acc)} m)`);
     } catch (e) {
-      pill("offline","warn");          // Funkloch: einfach weiter, nächster Fix wird gesendet
-      if (e.name !== "AbortError") log("Netz: "+e.message);
-    } finally { sending = false; }
+      pill("offline / keine Antwort","warn");   // Funkloch: einfach weiter, nächster Versuch folgt
+      log("Senden: " + (e.name === "TimeoutError" ? "BTR antwortet nicht (8 s)" : e.message));
+    } finally { sending = false; sendStarted = 0; }
   }
 
   function tick(){
+    if (sending && sendStarted && Date.now() - sendStarted > 15000) {   // Watchdog
+      sending = false; sendStarted = 0; log("Hängende Anfrage verworfen");
+    }
+    if (last) $("sPos").textContent = `${last.lat.toFixed(4)}, ${last.lon.toFixed(4)} · ±${Math.round(last.acc)} m`;
     if (lastSent) {
       const a = Math.round((Date.now()-lastSent.t)/1000);
       $("sAge").textContent = a; $("bStat").textContent = `läuft · ${sentCount} gesendet · vor ${a}s`;
@@ -337,7 +357,7 @@
   function start(){
     if (!("geolocation" in navigator)) return alert("Dieser Browser kann keinen Standort liefern.");
     if (!isSecureContext) return alert("Standort geht nur über HTTPS. Bitte die Seite per https:// öffnen.");
-    running = true; sentCount = 0; lastSent = null; prevFix = null;
+    running = true; sentCount = 0; lastSent = null; prevFix = null; lastAttempt = 0; sending = false;
     $("sSent").textContent = "0"; $("sAge").textContent = "–";
     $("startBtn").classList.add("hidden"); $("stopBtn").classList.remove("hidden");
     pill("warte auf GPS","warn"); log("Roadtrip gestartet");
